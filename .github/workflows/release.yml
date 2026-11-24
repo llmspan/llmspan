@@ -280,6 +280,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # NOTICE ships with every release (Apache-2.0), and this job otherwise has
+      # no checkout, so fetch the tagged tree for it.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Download only the artifacts the release actually ships. The
       # `.dockerbuild` blob that docker/build-push-action uploads by
       # default is a BuildKit metadata record we don't redistribute,
