@@ -1,0 +1,28 @@
+# Binaries
+/llmspan
+/dist/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.txt
+coverage.html
+
+# Local config and secrets
+config.yaml
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Docker volume data (compose stack)
+deploy/compose/data/
+
+# Local agent / Claude Code harness state
+.claude/
+.worktrees/

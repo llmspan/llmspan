@@ -1,0 +1,22 @@
+# Config for `make demo-real`: llmspan in front of an Ollama on the host running a small
+# open model. Tokens, latency and time-to-first-token on the dashboard are real
+# measurements of that model. Cost uses the ILLUSTRATIVE rate in
+# prices-local.yaml (local inference has no bill). Demo only: plaintext and
+# unauthenticated, ports published on loopback.
+upstreams:
+  - name: openai
+    prefix: /v1
+    target: http://host.docker.internal:11434   # Ollama on the host
+    provider: openai
+
+attribution:
+  header: X-Caller
+  conversation_header: X-Conversation-Id
+
+content:
+  mode: events
+  redact: default
+
+pricing:
+  path: /etc/llmspan/prices-local.yaml
+  fail_open: false

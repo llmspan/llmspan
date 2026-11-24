@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llmspan.fullname" . }}
+  labels:
+    {{- include "llmspan.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "llmspan.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "llmspan.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "llmspan.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llmspan
+          image: {{ include "llmspan.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["up", "--config", "/etc/llmspan/config.yaml"]
+          ports:
+            - name: https
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            {{- toYaml .Values.env | nindent 12 }}
+            - name: LLMSPAN_HEALTHCHECK_INSECURE
+              value: "true"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/llmspan/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/llmspan/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: auth
+              mountPath: {{ .Values.auth.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.pricing.existingConfigMap }}
+            - name: pricing
+              mountPath: /etc/llmspan/pricing
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      # Distroless has no sleep binary for preStop. SIGTERM flips /readyz
+      # false immediately (BeginDrain); this grace window must cover
+      # Endpoint propagation + http.shutdown_timeout stream drain.
+      terminationGracePeriodSeconds: {{ add .Values.probes.preStopSleepSeconds .Values.probes.shutdownTimeoutSeconds }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "llmspan.fullname" . }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if .Values.auth.enabled }}
+        - name: auth
+          secret:
+            secretName: {{ .Values.auth.secretName }}
+        {{- end }}
+        {{- if .Values.pricing.existingConfigMap }}
+        - name: pricing
+          configMap:
+            name: {{ .Values.pricing.existingConfigMap }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

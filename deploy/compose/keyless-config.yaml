@@ -1,0 +1,17 @@
+# Config for the keyless demo (make demo). Both providers route to the mock
+# upstream started by `llmspan demo`, so no API key or network access is needed.
+# Demo only: plaintext, unauthenticated, loopback-published ports.
+upstreams:
+  - name: openai
+    prefix: /v1
+    target: http://mock-upstream:8080
+    provider: openai
+  - name: anthropic
+    prefix: /anthropic
+    target: http://mock-upstream:8080
+    provider: anthropic
+    strip_prefix: true
+
+attribution:
+  header: X-Caller
+  conversation_header: X-Conversation-Id

@@ -1,0 +1,96 @@
+# Starter PrometheusRule / Grafana-managed alert expressions for llmspan.
+# Import into Grafana Alerting, or adapt into a PrometheusRule CRD.
+#
+# Metric names are the Prometheus OTLP-receiver translations used by the
+# shipped dashboard (see internal/telemetry/dashboard_test.go).
+
+groups:
+  - name: llmspan.self-health
+    interval: 30s
+    rules:
+      - alert: LLMspanBreakerOpen
+        expr: max by (upstream) (llmspan_breaker_state) == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "llmspan circuit breaker open for {{ $labels.upstream }}"
+          description: >
+            breaker.state=1 (open) for upstream {{ $labels.upstream }} for
+            more than 2m. Upstream 5xx storm or misclassified failures.
+            Check llmspan logs for trip events and upstream health.
+
+      # These two rules need the admin listener scraped (admin.listen): the
+      # export-health series are served from process memory there because the
+      # OTLP path itself is what fails in a collector outage.
+      - alert: LLMspanOTLPExportErrors
+        expr: sum by (instance) (rate(llmspan_telemetry_export_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "llmspan OTLP export errors on {{ $labels.instance }}"
+          description: >
+            Telemetry export is failing; LLM traffic is unaffected but spans and
+            metrics are being dropped. Check collector reachability and the
+            telemetry.* settings.
+
+      - alert: LLMspanOTLPExportStale
+        # 0 means "never exported yet" (just started); only alert once it has
+        # worked at least once and then stopped.
+        expr: >
+          (time() - llmspan_telemetry_last_export_success_timestamp_seconds) > 600
+          and llmspan_telemetry_last_export_success_timestamp_seconds > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "llmspan has not exported telemetry for 10+ minutes ({{ $labels.instance }})"
+          description: >
+            The last successful OTLP export was more than 10 minutes ago. Spans
+            and metrics are being dropped while requests keep flowing.
+
+      - alert: LLMspanHighRejectRate
+        expr: >
+          sum(rate(llmspan_requests_rejected_total[5m]))
+          /
+          clamp_min(sum(rate(llmspan_requests_total[5m])), 1e-9)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "llmspan rejecting >5% of requests"
+          description: >
+            Check reason label on llmspan_requests_rejected_total
+            (auth, breaker_open, concurrency, body_too_large, …).
+
+      - alert: LLMspanHigh5xxRate
+        expr: >
+          sum(rate(llmspan_requests_total{http_response_status_code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(llmspan_requests_total[5m])), 1e-9)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "llmspan 5xx ratio >5%"
+          description: >
+            Proxy-visible 5xx elevated. Correlate with breaker state and
+            upstream status panels on the llmspan-overview dashboard.
+
+      - alert: LLMspanCertExpiringSoon
+        expr: >
+          llmspan_tls_cert_not_after_seconds > 0
+          and
+          (llmspan_tls_cert_not_after_seconds - time()) < 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "llmspan TLS certificate expires within 7 days"
+          description: >
+            Hot-reload will pick up a renewed file automatically when
+            cert-manager rotates the mounted Secret. If reload failures
+            climb, check llmspan_tls_cert_reload_failures_total.

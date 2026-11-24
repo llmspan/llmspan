@@ -1,0 +1,174 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/llmspan/llmspan
+  tag: "" # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Breaker, max_in_flight, auth caches, and model-label cardinality are
+# per-replica process state. Scaling out is horizontal capacity, not a
+# shared circuit — see deploy/k8s/README.md.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 4443
+  # Container port must match listen in the ConfigMap.
+  targetPort: 4443
+
+# Self-observability: Prometheus-format /metrics for the llmspan.* self
+# metrics (requests, rejects, breaker state, streams, cert expiry) on a
+# SEPARATE plaintext, unauthenticated admin listener. GenAI metrics keep
+# flowing over OTLP. Off by default. Restrict the port with a
+# NetworkPolicy (deploy/k8s/networkpolicy.yaml) when enabled.
+metrics:
+  enabled: false
+  port: 9464
+  # Requires the Prometheus Operator CRDs.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}   # e.g. release: kube-prometheus-stack
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+# GOMEMLIMIT should sit ~10% under the memory limit.
+env:
+  - name: GOMEMLIMIT
+    value: "1800MiB"
+  - name: LLMSPAN_HEALTHCHECK_URL
+    value: "https://127.0.0.1:4443/healthz"
+
+# OTLP export. Rendered into the ConfigMap (env vars would override it).
+telemetry:
+  endpoint: "otel-collector.observability.svc:4317"
+  protocol: grpc          # grpc | http
+  # Plaintext to an in-cluster collector. Set insecure:false and terminate
+  # TLS at the collector for anything that leaves the cluster.
+  insecure: true
+  # Required when insecure:true and the endpoint is not loopback/RFC1918
+  # (cluster DNS names count as "non-local" to the validator).
+  acknowledgeInsecure: true
+  sampleRatio: 1.0
+  # headers:                # e.g. X-Scope-OrgID. Prefer a Secret-backed env
+  #   X-Scope-OrgID: tenant # (LLMSPAN_OTLP_HEADERS) for credentials.
+
+# TLS material: mount a Secret (cert-manager Certificate example in
+# deploy/k8s/certificate.yaml) at /etc/llmspan/tls.
+tls:
+  enabled: true
+  secretName: llmspan-tls
+  # Optional: Secret key (in the same Secret) holding a CA bundle. When set,
+  # every client must present a cert from it (mTLS), which also satisfies
+  # the listener-auth requirement.
+  clientCAKey: ""   # e.g. ca.crt
+
+# Cost catalogue override. Point at an existing ConfigMap holding a pricing
+# YAML (same shape as internal/pricing/prices.yaml); it is mounted read-only
+# and wired to pricing.path. Empty = built-in prices only.
+pricing:
+  existingConfigMap: ""
+  key: prices.yaml
+  failOpen: false
+
+# Listener authentication (REQUIRED for the non-loopback bind this chart
+# uses). Mount a Secret with key "tokens": one entry per line, either a bare
+# argon2id hash or `name:<hash>` to name the caller (the name becomes the
+# caller label on spans/metrics and cannot be spoofed via X-Caller):
+#
+#   echo -n "$SECRET" | llmspan hash-token --name billing >> tokens
+#   kubectl create secret generic llmspan-auth-tokens --from-file=tokens
+auth:
+  enabled: true
+  secretName: llmspan-auth-tokens
+  mountPath: /etc/llmspan/auth
+  # LOUD OPT-OUT: leave auth.enabled=false AND set this to true only if
+  # something else (service mesh mTLS, NetworkPolicy to a single trusted
+  # client) already restricts who can reach the pod. Anyone who can reach
+  # the port can otherwise spend your upstream API quota. Rendering fails
+  # if auth is disabled and this is not set.
+  allowUnauthenticated: false
+
+config:
+  # Rendered into a ConfigMap. Secrets stay out of this blob.
+  listen: "0.0.0.0:4443"
+  serviceName: llmspan
+  environment: production
+  # Quote "off" — bare `off` is a YAML bool and becomes content.mode: false.
+  contentMode: "off"
+  contentRedact: "default"
+  maxBodyBytes: "33554432"
+  streamIdleTimeout: "5m"
+  serviceNamespace: ""   # OTel service.namespace; defaults to the release namespace
+  # Process-wide cap on requests holding a <=1 MiB head buffer (429 above).
+  maxBufferedBodies: 512
+  # Wait for upstream response HEADERS. Non-streaming completions send
+  # nothing until generation ends: keep above your slowest such call.
+  responseHeaderTimeout: "5m"
+  maxInFlight: 256
+  breaker:
+    failures: 5
+    window: "30s"
+    recoveryWindow: "15s"
+    # 529 "overloaded" does not trip the breaker unless this is true; 429 and
+    # other 4xx never do. ignoreStatuses lists extra 5xx codes to ignore.
+    tripOnOverloaded: false
+    ignoreStatuses: []
+  # Caller attribution (spans always; metrics capped at maxCardinality).
+  # Named auth tokens take priority over the header.
+  attribution:
+    header: ""                 # e.g. X-Caller
+    maxCardinality: 200
+    conversationHeader: ""     # e.g. X-Conversation-Id (span-only)
+    grafanaAgentO11y: false
+  upstreams:
+    - name: openai
+      prefix: /v1
+      target: https://api.openai.com
+      provider: openai
+      stripPrefix: false
+    - name: anthropic
+      prefix: /anthropic
+      target: https://api.anthropic.com
+      provider: anthropic
+      stripPrefix: true
+
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 15
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  # Distroless has no sleep for a preStop hook, so llmspan itself keeps serving
+  # for this long after SIGTERM (http.shutdown_drain_delay) while /readyz is 503,
+  # letting kube remove the endpoint before the listener closes.
+  preStopSleepSeconds: 5
+  shutdownTimeoutSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

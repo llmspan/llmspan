@@ -1,0 +1,29 @@
+# Keyless demo: no API key, no network. Layer on top of the insecure stack:
+#   docker compose -f docker-compose.yml -f docker-compose.insecure.yml \
+#                  -f docker-compose.keyless.yml up -d --build
+# or: make demo
+#
+# Adds a mock OpenAI-compatible upstream (`llmspan demo`) and a tiny traffic
+# generator so the Grafana dashboard fills in within about a minute.
+services:
+  llmspan:
+    command: ["up", "--config", "/etc/llmspan/config.yaml"]
+    volumes:
+      - ./keyless-config.yaml:/etc/llmspan/config.yaml:ro
+    depends_on:
+      mock-upstream:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  mock-upstream:
+    image: llmspan:dev
+    command: ["demo", "--listen", "0.0.0.0:8080"]
+
+  traffic:
+    image: alpine:3.20
+    depends_on:
+      - llmspan
+    volumes:
+      - ./traffic.sh:/traffic.sh:ro
+    command: ["sh", "/traffic.sh"]

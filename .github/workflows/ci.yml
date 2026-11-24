@@ -1,0 +1,217 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on force-push / rapid re-push; keep main pushes
+# sequential (they gate merges, not iteration speed).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.26"
+
+# Third-party (and first-party) actions are pinned to full commit SHAs —
+# tags are mutable and a retagged action runs with this workflow's
+# permissions. The trailing comment records the human-readable version;
+# Dependabot updates SHA pins in place.
+jobs:
+  test:
+    name: test (-race, go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported toolchain plus the newest release, so a
+        # dependency/toolchain break (e.g. grpc vs Go 1.27) is caught in CI.
+        go: ["1.26", "stable"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: go test -race -count=1 with coverage
+        run: |
+          go test -race -count=1 -timeout=2m \
+            -covermode=atomic \
+            -coverpkg=./internal/... \
+            -coverprofile=coverage.out \
+            ./...
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-${{ matrix.go }}
+          path: coverage.out
+      - name: Enforce 70% line coverage on internal/
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $NF); print $NF}')
+          echo "total coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN { exit (p+0 < 70.0) }' \
+            || { echo "::error::coverage ${pct}% < 70% gate"; exit 1; }
+          fail=0
+          for spec in "auth:55" "config:65" "provider:50" "proxy:55" "redact:70" "telemetry:45"; do
+            dir=${spec%%:*}
+            min=${spec##*:}
+            avg=$(go tool cover -func=coverage.out | grep "/internal/${dir}/" | awk '{gsub(/%/,"",$NF); sum+=$NF; n++} END { if (n) printf "%.1f", sum/n; else print "0" }')
+            echo "internal/${dir} avg coverage: ${avg}% (floor ${min}%)"
+            awk -v p="$avg" -v m="$min" 'BEGIN { exit (p+0 < m+0) }' || {
+              echo "::error::internal/${dir} avg coverage ${avg}% < ${min}%"
+              fail=1
+            }
+          done
+          exit $fail
+
+  fuzz:
+    name: fuzz (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go fuzz (30s per target)
+        run: |
+          go test ./internal/redact/ -fuzz=FuzzRedactIdempotent -fuzztime=30s -count=1
+          go test ./internal/auth/ -fuzz=FuzzHasValidShape -fuzztime=15s -count=1
+          go test ./internal/config/ -fuzz=FuzzParseTokensFile -fuzztime=15s -count=1
+
+  lint:
+    name: lint (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        with:
+          # v2.x understands the project's v2-schema .golangci.yml.
+          version: v2.12.2
+          args: --timeout=5m
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install govulncheck
+        # Version-pinned so the scan is reproducible across re-runs;
+        # bumped deliberately, not implicitly via @latest.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - name: govulncheck ./...
+        run: govulncheck ./...
+
+  trivy:
+    name: trivy fs (HIGH/CRITICAL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+  load:
+    name: load test (p99 added latency)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: make load-test
+        # Slightly relaxed budget on the shared GitHub runner —
+        # virtualization noise pushes p99 above the 5ms local
+        # default. The point is regression detection vs the trend,
+        # not a hard SLO.
+        env:
+          LOAD_RPS: "200"
+          LOAD_DURATION: "10s"
+          LOAD_P99_BUDGET: "15ms"
+        run: make load-test
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+          COMMIT=$(git rev-parse --short HEAD)
+          # Commit timestamp, not wall clock: two builds of the same
+          # commit produce the same embedded date.
+          DATE=$(git log -1 --format=%cI)
+          out="llmspan-${GOOS}-${GOARCH}"
+          go build -trimpath \
+            -ldflags "-s -w \
+              -X github.com/llmspan/llmspan/internal/buildinfo.Version=${VERSION} \
+              -X github.com/llmspan/llmspan/internal/buildinfo.Commit=${COMMIT} \
+              -X github.com/llmspan/llmspan/internal/buildinfo.Date=${DATE}" \
+            -o "${out}" ./cmd/llmspan
+      - name: Upload build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: llmspan-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: llmspan-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  # PR-time image build so a broken Dockerfile surfaces here, not at
+  # release-tag time when half the artifacts are already published. No
+  # push, single arch — the release workflow covers multi-arch.
+  docker:
+    name: docker build (PR smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: docker build
+        run: docker build --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA::7} -t llmspan:ci .
+
+  # End-to-end demo-stack proof: compose up with a stub upstream, one
+  # proxied request, then assert token + cost series exist in
+  # Prometheus. Guards the README quick start against pipeline rot
+  # (metric renames, collector config drift, dashboard datasource
+  # breakage all surface here).
+  compose-smoke:
+    name: compose smoke (proxy → prometheus)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: run smoke test
+        run: ./test/smoke/smoke.sh

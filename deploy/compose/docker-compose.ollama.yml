@@ -1,0 +1,31 @@
+# Real-data demo: llmspan in front of an Ollama (or any OpenAI-compatible server)
+# already running on the HOST, serving llama3.2:1b.
+#
+#   ollama serve &            # or the Ollama app
+#   ollama pull llama3.2:1b   # ~1.3 GB, once
+#   make demo-real
+#
+# The model runs on the host (not in a container) because Docker Desktop has no
+# GPU access and CPU inference inside its VM is about 1 token/s. Tokens, latency
+# and time-to-first-token on the dashboard are real measurements of that model.
+services:
+  llmspan:
+    command: ["up", "--config", "/etc/llmspan/config.yaml"]
+    environment:
+      LLMSPAN_CAPTURE: "events"   # env beats the YAML; the base file sets it to off
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # needed on Linux; Docker Desktop has it
+    volumes:
+      - ./ollama-config.yaml:/etc/llmspan/config.yaml:ro
+      - ./prices-local.yaml:/etc/llmspan/prices-local.yaml:ro
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  traffic:
+    image: alpine:3.20
+    depends_on:
+      - llmspan
+    volumes:
+      - ./traffic-real.sh:/traffic.sh:ro
+    command: ["sh", "/traffic.sh"]

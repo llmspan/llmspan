@@ -1,0 +1,290 @@
+# llmspan config — see https://github.com/llmspan/llmspan
+#
+# All scalar values are overridable from environment variables prefixed with
+# LLMSPAN_. The structural sections (upstreams) belong here.
+
+# Address llmspan listens on. Clients point their *_BASE_URL at this address.
+# Default is loopback-only on purpose: a non-loopback bind requires either
+# TLS (below) or an explicit allow_insecure=true to acknowledge plaintext.
+listen: "127.0.0.1:4000"
+
+# Acknowledge serving plaintext on a non-loopback interface. Only set this
+# in trusted environments (sidecar, single-host docker bridge) where the
+# network between client and proxy is not reachable from outside.
+allow_insecure: false
+
+# Acknowledge serving a NON-loopback listener with no listener auth (no
+# auth.tokens / tokens_file and no tls.client_ca_file). TLS alone protects
+# the wire, not access: without auth, anyone who can reach the port can
+# spend your upstream API quota through the proxy. Startup is refused
+# unless you configure auth below or set this explicitly
+# (env: LLMSPAN_ALLOW_UNAUTHENTICATED=true). Loopback binds are exempt.
+allow_unauthenticated: false
+
+# Listener-side TLS termination. Setting cert_file + key_file flips llmspan
+# to HTTPS; clients then use OPENAI_BASE_URL=https://llmspan.internal/v1.
+# Setting client_ca_file additionally requires every client to present a
+# certificate chained to that CA (mTLS). This is the right knob when llmspan
+# is shared across services in a VPC.
+tls:
+  cert_file: ""        # e.g. /etc/llmspan/tls.crt
+  key_file:  ""        # e.g. /etc/llmspan/tls.key
+  client_ca_file: ""   # optional, enables required mTLS
+
+# Upstream LLM APIs. The longest matching prefix (at a path-segment
+# boundary) routes the request. Provider: openai | anthropic | gemini.
+#
+# strip_prefix decides what the upstream sees:
+#   false (default) - the prefix IS the upstream's real base path and
+#                     forwards as-is. Right for /v1 -> api.openai.com,
+#                     where clients send /v1/chat/completions and the
+#                     upstream expects exactly that.
+#   true            - the prefix is a routing-only mount and is removed
+#                     before forwarding. Right for /anthropic ->
+#                     api.anthropic.com, where the SDK sends
+#                     /anthropic/v1/messages but the upstream expects
+#                     /v1/messages. Without it, every request 404s.
+upstreams:
+  - name: openai
+    prefix: /v1
+    target: https://api.openai.com
+    provider: openai
+    # strip_prefix: false         # /v1 is OpenAI's real base path
+    # max_in_flight: 256          # cap concurrent forwarded requests;
+                                  # over-cap = 429 + Retry-After: 1.
+                                  # Pairs with the circuit breaker
+                                  # below so an upstream brownout
+                                  # can't melt the proxy. DEFAULT 256;
+                                  # set 0 to disable (unlimited).
+    # response_header_timeout: 5m # how long to wait for the upstream's
+                                  # response HEADERS. Non-streaming
+                                  # completions send nothing until
+                                  # generation ends, so keep this above
+                                  # your slowest non-streaming call.
+                                  # Default 5m. Streaming bodies are
+                                  # bounded by http.stream_idle_timeout.
+    # pin_sha256:                 # Optional upstream certificate
+    #   - 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd  # SPKI sha256, hex (32B/64 chars).
+    #                             # Each entry must match the leaf
+    #                             # SPKI sha256 of an upstream cert
+    #                             # currently in rotation. Stdlib
+    #                             # chain verification still runs;
+    #                             # this is the additional pin layer.
+    # breaker:                    # Per-upstream circuit breaker. ON by
+    #                             # default (5 / 30s / 15s) when omitted.
+    #   failures: 5               # trip after N consecutive upstream
+    #                             # failures. 0 disables the breaker.
+    #   window: 30s               # consecutive count resets if no
+    #                             # failure within window. 0 = no
+    #                             # time bound on the run.
+    #   recovery_window: 15s      # breaker stays open this long
+    #                             # before admitting one probe.
+    #   # What counts as a failure: 5xx, EXCEPT 529 "overloaded" (provider
+    #   # load shedding; tripping would turn a slowdown into a local
+    #   # outage). Never counted: 429, other 4xx, and 499 (client hung
+    #   # up). 4xx/429/ignored statuses reset the run (upstream is
+    #   # answering); 499 is neutral.
+    #   trip_on_overloaded: false # true = 529 counts too.
+    #   ignore_statuses: []       # extra 5xx codes that never count,
+    #                             # e.g. [503] for capacity-shedding 503s.
+
+  - name: anthropic
+    prefix: /anthropic
+    target: https://api.anthropic.com
+    provider: anthropic
+    strip_prefix: true            # /anthropic is routing-only; the
+                                  # upstream expects /v1/messages
+    # max_in_flight: 256
+    # pin_sha256: []
+    # breaker:
+    #   failures: 5
+    #   recovery_window: 15s
+
+  # - name: gemini
+  #   prefix: /gemini
+  #   target: https://generativelanguage.googleapis.com
+  #   provider: gemini
+  #   strip_prefix: true
+
+# Content encoding: llmspan relays response bytes and Content-Encoding exactly
+# as the upstream sent them (no decode/re-encode). The client's
+# Accept-Encoding is forwarded, narrowed to gzip/deflate when it offers them
+# so token/cost telemetry can still be parsed from a decoded side-copy. A
+# client offering only br/zstd gets br/zstd untouched but its responses
+# report zero tokens/cost (span attr llmspan.response.undecoded_encoding).
+# Clients that send no Accept-Encoding get an uncompressed upstream reply.
+
+# OpenTelemetry export. Endpoint format depends on protocol:
+#   grpc: "host:4317"        (no scheme)
+#   http: "host:4318"        (no scheme; HTTPS implied unless insecure: true)
+#   http: "https://host/otlp" (URL form: a base URL, /v1/<signal> is appended and
+#         the scheme decides TLS; use for backends that serve OTLP under a path,
+#         e.g. Grafana Cloud's https://otlp-gateway-<zone>.grafana.net/otlp)
+telemetry:
+  endpoint: localhost:4317
+  protocol: grpc
+  insecure: true
+  # acknowledge_insecure: true   # required when insecure=true AND endpoint
+                                 # is not loopback / RFC1918. Exporting
+                                 # prompts in cleartext over the WAN is
+                                 # rarely intentional, so the proxy
+                                 # refuses by default.
+  sample_ratio: 1.0
+  # Error/5xx spans are always retained. These optional export-time
+  # priority thresholds retain expensive or slow spans even when the
+  # baseline sample_ratio decision drops them.
+  cost_sample_threshold_usd: 0
+  slow_sample_threshold: 0s
+  timeout: 10s
+  # /readyz is 200 while serving regardless of collector state. Set true
+  # to keep the pod NotReady until the first successful OTLP export.
+  # ready_requires_export: false
+  # headers:
+  #   X-Scope-OrgID: tenant-1
+
+# Prompt/completion content capture. mode controls whether content is
+# emitted at all; redact scrubs every captured string before it reaches
+# a span attribute.
+#
+#   mode: off|events|logs
+#     off    - only metadata (model, tokens, finish reasons) leaves
+#              the proxy. Default.
+#     events - attach content as span events.
+#     logs   - emit content through the OTel log signal.
+#
+#   redact: off|default|strict
+#     off     - passthrough, no scrubbing. Must be explicit opt-in.
+#     default - mask high-confidence credential / PII markers:
+#               OpenAI sk-, Slack xox*, AWS AKIA, Google AIza, Groq
+#               gsk_, Replicate r8_, Hugging Face hf_, xAI xai-,
+#               GitHub ghp_/github_pat_, GCP service-account
+#               private_key, raw PEM private-key blocks, common JWT
+#               shape, emails. RECOMMENDED.
+#     strict  - default + credit-card (Luhn-validated) + US SSN +
+#               E.164 phone numbers. For regulated workloads.
+#
+# Default value is "default" so flipping mode to events without
+# thinking about redaction doesn't silently ship secrets.
+content:
+  mode: off
+  redact: default
+
+http:
+  read_header_timeout: 30s
+  idle_timeout: 120s
+  shutdown_timeout: 30s
+  # shutdown_drain_delay: 0s   # keep serving this long after SIGTERM while /readyz is 503
+  # body_read_timeout bounds the inbound request read (headers + body).
+  # A slow uploader trying to pin a goroutine for the full body
+  # duration trips it. Zero disables the deadline (do not do this in
+  # production). Outbound response writes stay unbounded so streaming
+  # LLM responses can legitimately run for minutes.
+  body_read_timeout: 30s
+  # cert_reload_interval is how often llmspan re-stats tls.cert_file and
+  # tls.key_file and atomically swaps the served cert when ModTime
+  # advances. This is what makes cert-manager / Let's Encrypt renewals
+  # work without restarting the process. Zero disables hot-reload.
+  cert_reload_interval: 30s
+  # stream_idle_timeout is the max silence between upstream body bytes
+  # AFTER response headers. A hung SSE/JSON stream that never EOFs
+  # would otherwise pin a concurrency slot and block WaitForStreams
+  # forever. Trips emit span event llmspan.stream.idle_timeout and
+  # metric llmspan.streams.idle_timeouts.total. Zero disables.
+  stream_idle_timeout: 5m
+
+# Inbound request shaping. llmspan buffers up to 1 MiB of every request
+# body for parser-driven enrichment, then forwards the original stream
+# byte-for-byte. Bodies above max_body_bytes are refused with HTTP 413
+# without contacting the upstream. Default is 32 MiB to accommodate
+# multimodal (vision / audio) payloads.
+request:
+  max_body_bytes: 33554432   # 32 MiB; applies to recognised LLM endpoints only.
+                             # Other paths on an upstream (e.g. /v1/files) are
+                             # forwarded without a size cap.
+  # Process-wide cap on requests concurrently holding their (<= 1 MiB)
+  # enrichment head buffer, so buffer memory is bounded to roughly
+  # max_buffered_bodies x 1 MiB regardless of per-upstream max_in_flight.
+  # Over the cap = 429 + Retry-After: 1 (rejected reason "body_buffer").
+  # Default 512; 0 = unlimited. NOTE: the slot is held for the whole
+  # request, so this is also an effective cap on concurrent in-flight
+  # LLM requests (including long streams). Raise it if you expect more
+  # than 512 simultaneous streams.
+  max_buffered_bodies: 512
+
+# Listener-side bearer-token authentication. When no tokens are configured
+# (the default), every reachable caller may use the proxy — acceptable on
+# a loopback bind, refused elsewhere unless allow_unauthenticated (above)
+# or mTLS is set, since the proxy spends your upstream API quota.
+# Generate one hash per client with `llmspan hash-token`:
+#
+#   echo -n 'client-secret-here' | ./llmspan hash-token
+#   echo -n 'client-secret-here' | ./llmspan hash-token --name billing
+#
+# The plaintext token goes in the client's env (e.g. as a custom
+# header injected by their SDK); the hash goes here.
+#
+# NAMED TOKENS: write an entry as `name:<hash>` to give that credential a
+# caller identity. The name becomes the caller label on spans, metrics and
+# logs and takes priority over attribution.header, so a named client
+# cannot impersonate another by sending X-Caller. Names: letters, digits,
+# . _ - @ (max 64). Anonymous entries (bare hash) keep a one-way
+# "token:<fingerprint>" label. Names are metric labels: keep the count
+# under attribution.max_cardinality.
+auth:
+  # tokens:
+  #   - "billing:$argon2id$v=19$m=65536,t=3,p=2$<salt>$<hash>"
+  #   - "$argon2id$v=19$m=65536,t=3,p=2$<salt>$<hash>"        # anonymous
+  # tokens_file: /etc/llmspan/auth/tokens   # one entry per line; a line is
+  #                                        # `<hash>`, `name:<hash>` or
+  #                                        # `name <hash>`; # comments ok.
+  #                                        # Preferred for k8s Secret mounts
+  #                                        # (also LLMSPAN_AUTH_TOKENS_FILE)
+  header: "X-LLMSPAN-Token"   # default; keeps Authorization free for the upstream
+
+# Self-observability. A SEPARATE plaintext listener serving Prometheus-format
+# /metrics for the llmspan.* self metrics only (requests, rejects, breaker
+# state, streams, TLS cert expiry, pricing misses). Off by default. GenAI
+# metrics continue to go out over OTLP. Binds loopback only unless
+# allow_non_loopback is set (needed for in-cluster scraping; then protect it
+# with a NetworkPolicy — it is unauthenticated). Env: LLMSPAN_ADMIN_LISTEN.
+admin:
+  listen: ""                  # e.g. 127.0.0.1:9464
+  allow_non_loopback: false
+
+# Per-caller attribution priority: configured header, mTLS certificate
+# common name, then a non-reversible auth-token fingerprint. The raw caller
+# is a span attribute; metric labels are capped and overflow to `_other`.
+attribution:
+  header: ""                  # e.g. X-Caller
+  max_cardinality: 200
+  # Header whose value becomes the gen_ai.conversation.id span attribute
+  # (stripped before forwarding; span-only, never a metric label).
+  conversation_header: ""     # e.g. X-Conversation-Id
+  # Stamp agento11y.record=true on spans so Grafana Cloud Agent
+  # Observability ingests them as conversations (pair with content.mode).
+  grafana_agent_o11y: false
+
+# Optional append-only record/replay JSONL. Disabled by default. Request,
+# response, and URL values always inherit content.redact. Files are 0600.
+recording:
+  path: ""                    # e.g. /var/lib/llmspan/traffic.jsonl
+
+# Cost catalogue override. Built-in prices ship with llmspan (see
+# internal/pricing/prices.yaml for the embedded snapshot). Production
+# deployments should point `path` at a YAML file with the same shape
+# to record negotiated rates instead of public list price. The file
+# is merged on top of the built-ins, so unspecified models keep their
+# default rate.
+#
+# `fail_open: false` is recommended for production — a missing or
+# malformed file fails the proxy at startup so operators notice.
+# `fail_open: true` swallows the error and falls back to the
+# built-in catalogue.
+pricing:
+  path: ""           # e.g. /etc/llmspan/prices.yaml
+  fail_open: false
+
+service:
+  name: llmspan
+  namespace: observability
+  environment: dev

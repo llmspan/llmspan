@@ -1,0 +1,48 @@
+name: pricing-freshness
+
+# The built-in price table is a hand-maintained snapshot (docs/PRICING.md).
+# This job fails, and opens one tracking issue, when the snapshot is older than
+# 90 days, so cost figures cannot go stale unnoticed. It makes no network calls
+# to provider sites.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: price snapshot age
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Check snapshot age
+        id: check
+        continue-on-error: true
+        run: make check-prices
+      - name: Open or update the tracking issue
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Price table snapshot is stale"
+          body="The embedded price snapshot is older than 90 days, so cost estimates may be wrong. See docs/PRICING.md#refreshing: re-read the provider pricing pages, update internal/pricing/prices.yaml and pricing.Snapshot, and add new model ids to corpus_test.go. Run: make check-prices"
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still stale as of $(date -u +%F). $body"
+          else
+            gh issue create --title "$title" --body "$body" --label "area/pricing" \
+              || gh issue create --title "$title" --body "$body"
+          fi
+      - name: Fail the job if stale
+        if: steps.check.outcome == 'failure'
+        run: exit 1

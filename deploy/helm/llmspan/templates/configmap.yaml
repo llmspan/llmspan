@@ -1,0 +1,82 @@
+{{- if and (not .Values.auth.enabled) (not .Values.auth.allowUnauthenticated) (not .Values.tls.clientCAKey) }}
+{{- fail "llmspan listens on a non-loopback address and requires listener auth: set auth.enabled=true (with a tokens Secret, see values.yaml), configure tls.clientCAKey for mTLS, or explicitly opt out with auth.allowUnauthenticated=true" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llmspan.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llmspan.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    listen: {{ .Values.config.listen | quote }}
+    {{- if .Values.tls.enabled }}
+    tls:
+      cert_file: /etc/llmspan/tls/tls.crt
+      key_file: /etc/llmspan/tls/tls.key
+      {{- if .Values.tls.clientCAKey }}
+      client_ca_file: {{ printf "/etc/llmspan/tls/%s" .Values.tls.clientCAKey | quote }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.auth.enabled }}
+    auth:
+      tokens_file: {{ printf "%s/tokens" .Values.auth.mountPath | quote }}
+    {{- else if .Values.auth.allowUnauthenticated }}
+    allow_unauthenticated: true
+    {{- end }}
+    {{- if .Values.metrics.enabled }}
+    admin:
+      listen: {{ printf "0.0.0.0:%d" (int .Values.metrics.port) | quote }}
+      allow_non_loopback: true
+    {{- end }}
+    service:
+      name: {{ .Values.config.serviceName | quote }}
+      namespace: {{ default .Release.Namespace .Values.config.serviceNamespace | quote }}
+      environment: {{ .Values.config.environment | quote }}
+    content:
+      mode: {{ .Values.config.contentMode | quote }}
+      redact: {{ .Values.config.contentRedact | quote }}
+    request:
+      max_body_bytes: {{ .Values.config.maxBodyBytes | int }}
+      max_buffered_bodies: {{ .Values.config.maxBufferedBodies | int }}
+    http:
+      stream_idle_timeout: {{ .Values.config.streamIdleTimeout | quote }}
+      shutdown_timeout: {{ printf "%ds" (int .Values.probes.shutdownTimeoutSeconds) | quote }}
+      shutdown_drain_delay: {{ printf "%ds" (int .Values.probes.preStopSleepSeconds) | quote }}
+    telemetry:
+      endpoint: {{ .Values.telemetry.endpoint | quote }}
+      protocol: {{ .Values.telemetry.protocol | quote }}
+      insecure: {{ .Values.telemetry.insecure }}
+      acknowledge_insecure: {{ .Values.telemetry.acknowledgeInsecure }}
+      sample_ratio: {{ .Values.telemetry.sampleRatio }}
+      {{- with .Values.telemetry.headers }}
+      headers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    attribution:
+      header: {{ .Values.config.attribution.header | quote }}
+      max_cardinality: {{ .Values.config.attribution.maxCardinality | int }}
+      conversation_header: {{ .Values.config.attribution.conversationHeader | quote }}
+      grafana_agent_o11y: {{ .Values.config.attribution.grafanaAgentO11y }}
+    {{- if .Values.pricing.existingConfigMap }}
+    pricing:
+      path: {{ printf "/etc/llmspan/pricing/%s" .Values.pricing.key | quote }}
+      fail_open: {{ .Values.pricing.failOpen }}
+    {{- end }}
+    upstreams:
+    {{- range .Values.config.upstreams }}
+      - name: {{ .name | quote }}
+        prefix: {{ .prefix | quote }}
+        target: {{ .target | quote }}
+        provider: {{ .provider | quote }}
+        strip_prefix: {{ .stripPrefix }}
+        max_in_flight: {{ $.Values.config.maxInFlight }}
+        response_header_timeout: {{ $.Values.config.responseHeaderTimeout | quote }}
+        breaker:
+          failures: {{ $.Values.config.breaker.failures }}
+          window: {{ $.Values.config.breaker.window }}
+          recovery_window: {{ $.Values.config.breaker.recoveryWindow }}
+          trip_on_overloaded: {{ $.Values.config.breaker.tripOnOverloaded }}
+          ignore_statuses: {{ toJson $.Values.config.breaker.ignoreStatuses }}
+    {{- end }}

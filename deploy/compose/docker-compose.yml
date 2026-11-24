@@ -1,0 +1,128 @@
+# Local LGTM-mini stack for demoing llmspan. Brings up:
+#   - tls-init        one-shot, generates a self-signed cert into a volume
+#   - llmspan          :4443   the proxy (HTTPS, self-signed cert)
+#   - otel-collector  :4317   OTLP gRPC + :4318 OTLP HTTP (fan-out)
+#   - tempo           :3200   distributed tracing
+#   - prometheus      :9090   metrics
+#   - loki            :3100   logs
+#   - grafana         :3000   UI, datasources & dashboard pre-provisioned
+#
+# Quick start (from repo root):
+#   make compose-up
+#   docker compose -f deploy/compose/docker-compose.yml \
+#     cp llmspan:/etc/llmspan/tls/tls.crt ./llmspan-ca.crt
+#   # then point clients at https://localhost:4443 and trust the cert:
+#   # curl --cacert, Python SSL_CERT_FILE, Node NODE_EXTRA_CA_CERTS —
+#   # see the README "Production path: TLS" trust matrix.
+#   open http://localhost:3000   # anonymous admin
+#
+# If you really want plaintext loopback for a 30-second demo, use
+# `make compose-up-insecure` instead — see the override file.
+services:
+  tls-init:
+    image: alpine:3.20
+    volumes:
+      - tls-data:/tls
+    # Idempotent: regenerate only when the cert is missing. SAN covers
+    # both localhost and 127.0.0.1 so clients have a sane match.
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        if [ ! -f /tls/tls.crt ]; then
+          apk add --no-cache openssl > /dev/null
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tls/tls.key -out /tls/tls.crt -days 365 \
+            -subj "/CN=llmspan.local" \
+            -addext "subjectAltName=DNS:localhost,DNS:llmspan,IP:127.0.0.1"
+          chmod 644 /tls/tls.crt /tls/tls.key
+          echo "tls-init: generated self-signed cert at /tls/tls.crt"
+        else
+          echo "tls-init: reusing existing /tls/tls.crt"
+        fi
+
+  llmspan:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: llmspan:dev
+    ports:
+      - "127.0.0.1:4443:4443"
+    environment:
+      LLMSPAN_LISTEN: "0.0.0.0:4443"
+      # Dev stack: TLS only. A non-loopback listener otherwise needs bearer
+      # tokens (auth.tokens_file) or mTLS; this opts out for local use only.
+      LLMSPAN_ALLOW_UNAUTHENTICATED: "true"
+      LLMSPAN_TLS_CERT_FILE: "/etc/llmspan/tls/tls.crt"
+      LLMSPAN_TLS_KEY_FILE: "/etc/llmspan/tls/tls.key"
+      LLMSPAN_OTLP_ENDPOINT: "otel-collector:4317"
+      LLMSPAN_OTLP_PROTOCOL: "grpc"
+      # otel-collector is on the docker network, not WAN — plaintext
+      # OTLP is fine here. Validation can't tell that a docker-network
+      # alias is private (hostnames are conservatively non-local), so
+      # the acknowledge flag opts in explicitly.
+      LLMSPAN_OTLP_INSECURE: "true"
+      LLMSPAN_OTLP_ACKNOWLEDGE_INSECURE: "true"
+      LLMSPAN_CAPTURE: "off"
+      LLMSPAN_ENV: "demo"
+    volumes:
+      - tls-data:/etc/llmspan/tls:ro
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+
+  tempo:
+    image: grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      - "127.0.0.1:3200:3200"
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --enable-feature=otlp-write-receiver
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  loki:
+    image: grafana/loki:3.2.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - tempo
+      - prometheus
+      - loki
+
+volumes:
+  tls-data:

@@ -1,0 +1,6 @@
+# ILLUSTRATIVE rates for the local demo model only. Running llama3.2 on your own
+# CPU costs nothing per token; these numbers are an assumption roughly in line
+# with small hosted models, so the cost panels have something to show. They are
+# not a quote from any provider. Merged over the built-in catalogue.
+openai:
+  llama3.2: { input_usd_per_mtok: 0.10, output_usd_per_mtok: 0.40 }

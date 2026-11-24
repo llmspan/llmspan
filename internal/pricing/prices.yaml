@@ -1,0 +1,144 @@
+# Built-in pricing catalogue. Snapshot 2026-11 (keep in sync with
+# pricing.Snapshot), fetched 2026-11-24 from the providers' official pages:
+#   Anthropic: https://platform.claude.com/docs/en/about-claude/pricing
+#   OpenAI:    https://developers.openai.com/api/docs/pricing
+#              (openai.com/api/pricing only links here; no token prices)
+#   Google:    https://aistudio.google.com/docs/pricing
+#              (formerly ai.google.dev/gemini-api/docs/pricing; paid tier,
+#              standard, text rates)
+# Models: platform.claude.com/docs/en/models/overview, aistudio.google.com/docs/models.
+# Pages were read through a summarising fetcher; see docs/PRICING.md for
+# the verification notes and anything left unverified.
+# Operators should override via `pricing.path` in config for negotiated rates.
+#
+# Schema: system -> model-prefix -> Rate. Fields (USD per 1M tokens):
+#   input_usd_per_mtok, output_usd_per_mtok,
+#   cached_input_usd_per_mtok               (cache read; default = input)
+#   cache_creation_input_usd_per_mtok       (cache write; default = input)
+#   long_context_threshold_tokens + long_input_usd_per_mtok /
+#     long_output_usd_per_mtok / long_cached_input_usd_per_mtok /
+#     long_cache_creation_input_usd_per_mtok  (whole request is billed at
+#     the long rates when the prompt, incl. cache tokens, exceeds the
+#     threshold)
+#   service_tier_multipliers: {tier: multiplier}  (per-model override of
+#     the built-in batch/flex/priority multipliers)
+# System names are gen_ai.provider.name values: openai, anthropic, gcp.gen_ai.
+# Lookup is longest-prefix-match against the lowercased model string, so
+# snapshot pins inherit their family's rate. CAVEAT: a bare id such as
+# "claude-opus-5" is a prefix of any later minor ("claude-opus-5-6"), which
+# would silently inherit its rate; list every released minor explicitly and
+# refresh on each release. Families with no bare-prefix entry (e.g.
+# claude-opus-4-*) miss visibly via llmspan.pricing.misses.total.
+
+openai:
+  # --- verified 2026-11-24. Long context = prompt >272K tokens. ---
+  gpt-6.2-astra: { input_usd_per_mtok: 8, output_usd_per_mtok: 40, cached_input_usd_per_mtok: 0.4, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 16, long_output_usd_per_mtok: 60, long_cached_input_usd_per_mtok: 0.8 }
+  gpt-6.2-sol: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.1, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 4, long_output_usd_per_mtok: 15, long_cached_input_usd_per_mtok: 0.2 }
+  gpt-6-astra: { input_usd_per_mtok: 10, output_usd_per_mtok: 50, cached_input_usd_per_mtok: 1, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 20, long_output_usd_per_mtok: 75, long_cached_input_usd_per_mtok: 2 }
+  gpt-6.1-sol: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.1, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 4, long_output_usd_per_mtok: 15, long_cached_input_usd_per_mtok: 0.2 }
+  gpt-6.1-terra: { input_usd_per_mtok: 1, output_usd_per_mtok: 5, cached_input_usd_per_mtok: 0.05, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 2, long_output_usd_per_mtok: 7.5, long_cached_input_usd_per_mtok: 0.1 }
+  gpt-6-luna: { input_usd_per_mtok: 0.1, output_usd_per_mtok: 0.5, cached_input_usd_per_mtok: 0.01, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 0.2, long_output_usd_per_mtok: 0.75, long_cached_input_usd_per_mtok: 0.02 }
+  gpt-6-sol: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.2, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 4, long_output_usd_per_mtok: 15, long_cached_input_usd_per_mtok: 0.4 }
+  gpt-5.6-sol: { input_usd_per_mtok: 4, output_usd_per_mtok: 20, cached_input_usd_per_mtok: 0.4, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 8, long_output_usd_per_mtok: 30, long_cached_input_usd_per_mtok: 0.8 }
+  gpt-5.6-terra: { input_usd_per_mtok: 2, output_usd_per_mtok: 12, cached_input_usd_per_mtok: 0.2, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 4, long_output_usd_per_mtok: 18, long_cached_input_usd_per_mtok: 0.4 }
+  gpt-5.6-luna: { input_usd_per_mtok: 0.2, output_usd_per_mtok: 1.2, cached_input_usd_per_mtok: 0.02, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 0.4, long_output_usd_per_mtok: 1.8, long_cached_input_usd_per_mtok: 0.04 }
+  gpt-5.5: { input_usd_per_mtok: 5, output_usd_per_mtok: 30, cached_input_usd_per_mtok: 0.5, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 10, long_output_usd_per_mtok: 45, long_cached_input_usd_per_mtok: 1 }
+  gpt-5.4: { input_usd_per_mtok: 2.5, output_usd_per_mtok: 15, cached_input_usd_per_mtok: 0.25, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 5, long_output_usd_per_mtok: 22.5, long_cached_input_usd_per_mtok: 0.5 }
+  gpt-5.5-pro: { input_usd_per_mtok: 30, output_usd_per_mtok: 180, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 60, long_output_usd_per_mtok: 270 }
+  gpt-5.4-pro: { input_usd_per_mtok: 30, output_usd_per_mtok: 180, long_context_threshold_tokens: 272000, long_input_usd_per_mtok: 60, long_output_usd_per_mtok: 270 }
+  gpt-5.4-mini: { input_usd_per_mtok: 0.75, output_usd_per_mtok: 4.5, cached_input_usd_per_mtok: 0.075 }
+  gpt-5.4-nano: { input_usd_per_mtok: 0.2, output_usd_per_mtok: 1.25, cached_input_usd_per_mtok: 0.02 }
+  gpt-5.2: { input_usd_per_mtok: 1.75, output_usd_per_mtok: 14, cached_input_usd_per_mtok: 0.175 }
+  gpt-5.1: { input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.125 }
+  gpt-5-mini: { input_usd_per_mtok: 0.25, output_usd_per_mtok: 2, cached_input_usd_per_mtok: 0.025 }
+  gpt-5-nano: { input_usd_per_mtok: 0.05, output_usd_per_mtok: 0.4, cached_input_usd_per_mtok: 0.005 }
+  gpt-5: { input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.125 }
+  gpt-4.1-mini: { input_usd_per_mtok: 0.4, output_usd_per_mtok: 1.6, cached_input_usd_per_mtok: 0.1 }
+  gpt-4.1: { input_usd_per_mtok: 2, output_usd_per_mtok: 8, cached_input_usd_per_mtok: 0.5 }
+  o3: { input_usd_per_mtok: 2, output_usd_per_mtok: 8, cached_input_usd_per_mtok: 0.5 }
+  gpt-4o-mini: { input_usd_per_mtok: 0.15, output_usd_per_mtok: 0.6, cached_input_usd_per_mtok: 0.075 }
+  gpt-4o: { input_usd_per_mtok: 2.5, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 1.25 }
+  gpt-5.2-pro: { input_usd_per_mtok: 21, output_usd_per_mtok: 168 }
+  gpt-5-pro: { input_usd_per_mtok: 15, output_usd_per_mtok: 120 }
+  o3-pro: { input_usd_per_mtok: 20, output_usd_per_mtok: 80 }
+  # Batch/flex = 0.5x and fast/priority ~2x are applied by service tier
+  # (pricing.CostTiered), not listed here.
+  # --- Specialized models, verified 2026-11-24 on the same page (Codex and
+  # Embeddings sections). ---
+  gpt-5.3-codex: { input_usd_per_mtok: 1.75, output_usd_per_mtok: 14, cached_input_usd_per_mtok: 0.175 }
+  text-embedding-3-small: { input_usd_per_mtok: 0.02, output_usd_per_mtok: 0 }
+  text-embedding-3-large: { input_usd_per_mtok: 0.13, output_usd_per_mtok: 0 }
+  text-embedding-ada-002: { input_usd_per_mtok: 0.1, output_usd_per_mtok: 0 }
+  # --- Tombstones: NOT on the 2026-11-24 pricing page, so no price is shipped.
+  # `unpriced: true` makes the longest-prefix match report "no price" instead of
+  # silently inheriting the shorter parent's rate (e.g. gpt-5.5-mini -> gpt-5.5,
+  # o3-mini -> o3, gpt-4.1-nano -> gpt-4.1), which would be wrong. Misses are
+  # counted by llmspan.pricing.misses.total. Other removed legacy models
+  # (o4-mini, o1*, gpt-4, gpt-4-turbo, gpt-3.5-turbo) have no parent prefix and
+  # miss naturally. Override via `pricing.path` if you still run them. ---
+  gpt-5.5-mini: { unpriced: true }
+  gpt-5.5-nano: { unpriced: true }
+  gpt-4.1-nano: { unpriced: true }
+  o3-mini: { unpriced: true }
+
+anthropic:
+  # --- verified 2026-11-24. cache read = 0.1x input (0.05x Opus 5.5 / Sonnet 5.5,
+  # 0.025x Fable/Mythos 5.1+); cache write = 5-minute rate 1.25x (1h = 2x is not
+  # distinguishable from usage totals, so 5m is billed). Model IDs verified
+  # against platform.claude.com/docs/en/models/overview (current: claude-fable-5-2,
+  # claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5) and
+  # .../about-claude/models/model-ids-and-versions (4.6+ IDs are dateless pinned
+  # snapshots; pre-4.6 IDs are claude-<name>-<maj>-<min>-<YYYYMMDD> with a
+  # dateless alias, e.g. claude-sonnet-4-5-20250929 / claude-haiku-4-5-20251001,
+  # both matched by prefix). Older/limited IDs (mythos-*, fable-5-1, opus-5, 4.x)
+  # follow the same documented scheme; the overview lists them by display name
+  # with pricing only. ---
+  claude-fable-5-2: { input_usd_per_mtok: 8, output_usd_per_mtok: 40, cached_input_usd_per_mtok: 0.2, cache_creation_input_usd_per_mtok: 10 }
+  claude-mythos-5-2: { input_usd_per_mtok: 8, output_usd_per_mtok: 40, cached_input_usd_per_mtok: 0.2, cache_creation_input_usd_per_mtok: 10 }
+  claude-fable-5-1: { input_usd_per_mtok: 10, output_usd_per_mtok: 50, cached_input_usd_per_mtok: 0.25, cache_creation_input_usd_per_mtok: 12.5 }
+  claude-mythos-5-1: { input_usd_per_mtok: 10, output_usd_per_mtok: 50, cached_input_usd_per_mtok: 0.25, cache_creation_input_usd_per_mtok: 12.5 }
+  # Bare ids below prefix-match later minors (see caveat in header).
+  claude-fable-5: { input_usd_per_mtok: 10, output_usd_per_mtok: 50, cached_input_usd_per_mtok: 1, cache_creation_input_usd_per_mtok: 12.5 }
+  claude-mythos-5: { input_usd_per_mtok: 10, output_usd_per_mtok: 50, cached_input_usd_per_mtok: 1, cache_creation_input_usd_per_mtok: 12.5 }
+  claude-opus-5-5: { input_usd_per_mtok: 4, output_usd_per_mtok: 20, cached_input_usd_per_mtok: 0.2, cache_creation_input_usd_per_mtok: 5 }
+  claude-opus-5: { input_usd_per_mtok: 5, output_usd_per_mtok: 25, cached_input_usd_per_mtok: 0.5, cache_creation_input_usd_per_mtok: 6.25 }
+  claude-opus-4-8: { input_usd_per_mtok: 5, output_usd_per_mtok: 25, cached_input_usd_per_mtok: 0.5, cache_creation_input_usd_per_mtok: 6.25 }
+  claude-opus-4-7: { input_usd_per_mtok: 5, output_usd_per_mtok: 25, cached_input_usd_per_mtok: 0.5, cache_creation_input_usd_per_mtok: 6.25 }
+  claude-opus-4-6: { input_usd_per_mtok: 5, output_usd_per_mtok: 25, cached_input_usd_per_mtok: 0.5, cache_creation_input_usd_per_mtok: 6.25 }
+  claude-opus-4-5: { input_usd_per_mtok: 5, output_usd_per_mtok: 25, cached_input_usd_per_mtok: 0.5, cache_creation_input_usd_per_mtok: 6.25 }
+  # opus 4.1 and the retired opus 4 base kept 15/75; no bare "claude-opus-4"
+  # fallback exists on purpose so unlisted minors (e.g. 4-9) miss visibly.
+  claude-opus-4-1: { input_usd_per_mtok: 15, output_usd_per_mtok: 75, cached_input_usd_per_mtok: 1.5, cache_creation_input_usd_per_mtok: 18.75 }
+  claude-opus-4-2025: { input_usd_per_mtok: 15, output_usd_per_mtok: 75, cached_input_usd_per_mtok: 1.5, cache_creation_input_usd_per_mtok: 18.75 }
+  # Sonnet 5: $2/$10 is now the standard price (intro-price end on 2026-09-01
+  # was cancelled per the pricing page). 5.5 has a 0.05x cache-read rate.
+  claude-sonnet-5-5: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.1, cache_creation_input_usd_per_mtok: 2.5 }
+  claude-sonnet-5: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.2, cache_creation_input_usd_per_mtok: 2.5 }
+  # Prefix covers Sonnet 4, 4.5, 4.6 and their dated snapshots (all $3/$15).
+  claude-sonnet-4: { input_usd_per_mtok: 3, output_usd_per_mtok: 15, cached_input_usd_per_mtok: 0.3, cache_creation_input_usd_per_mtok: 3.75 }
+  # Haiku 5.5: prompts >100K tokens (incl. cache tokens) bill at higher rates.
+  claude-haiku-5-5: { input_usd_per_mtok: 0.1, output_usd_per_mtok: 0.5, cached_input_usd_per_mtok: 0.01, cache_creation_input_usd_per_mtok: 0.125, long_context_threshold_tokens: 100000, long_input_usd_per_mtok: 0.5, long_output_usd_per_mtok: 2.5, long_cached_input_usd_per_mtok: 0.05, long_cache_creation_input_usd_per_mtok: 0.625 }
+  claude-haiku-4-5: { input_usd_per_mtok: 1, output_usd_per_mtok: 5, cached_input_usd_per_mtok: 0.1, cache_creation_input_usd_per_mtok: 1.25 }
+  # claude-3-* (3, 3.5, 3.7) are not on the 2026-11-24 pricing or models pages and
+  # were removed; they miss visibly via llmspan.pricing.misses.total.
+
+gcp.gen_ai:
+  # --- verified 2026-11-24, standard paid tier, TEXT rates (audio input is
+  # priced higher and is not modelled). cached_input = context-cache read;
+  # hourly cache storage is not billed here. Output includes thinking tokens.
+  # UPCOMING CHANGES (refresh on the date): gemini-4-carbon/argon become
+  # 4/20 (cache 0.20) on 2026-12-01; gemini-3.8-flash/3.6-flash become
+  # 1.50/7.50 (cache 0.15) on 2027-01-01. ---
+  gemini-4-carbon: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.1 }
+  gemini-4-argon: { input_usd_per_mtok: 2, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.1 }
+  gemini-4-neon: { input_usd_per_mtok: 3, output_usd_per_mtok: 15, cached_input_usd_per_mtok: 0.15 }
+  gemini-4-hydrogen: { input_usd_per_mtok: 1.5, output_usd_per_mtok: 7.5, cached_input_usd_per_mtok: 0.075 }
+  gemini-3.8-flash: { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75, cached_input_usd_per_mtok: 0.075 }
+  gemini-3.6-flash: { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75, cached_input_usd_per_mtok: 0.075 }
+  gemini-3.5-flash-lite: { input_usd_per_mtok: 0.3, output_usd_per_mtok: 2.5, cached_input_usd_per_mtok: 0.03 }
+  gemini-3.1-flash-lite: { input_usd_per_mtok: 0.25, output_usd_per_mtok: 1.5, cached_input_usd_per_mtok: 0.025 }
+  gemini-3-flash-preview: { input_usd_per_mtok: 0.5, output_usd_per_mtok: 3, cached_input_usd_per_mtok: 0.05 }
+  gemini-2.5-flash-lite: { input_usd_per_mtok: 0.1, output_usd_per_mtok: 0.4, cached_input_usd_per_mtok: 0.01 }
+  gemini-2.5-flash: { input_usd_per_mtok: 0.3, output_usd_per_mtok: 2.5, cached_input_usd_per_mtok: 0.03 }
+  gemini-3.1-pro-preview: { input_usd_per_mtok: 2, output_usd_per_mtok: 12, cached_input_usd_per_mtok: 0.2, long_context_threshold_tokens: 200000, long_input_usd_per_mtok: 4, long_output_usd_per_mtok: 18, long_cached_input_usd_per_mtok: 0.4 }
+  gemini-2.5-pro: { input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, cached_input_usd_per_mtok: 0.125, long_context_threshold_tokens: 200000, long_input_usd_per_mtok: 2.5, long_output_usd_per_mtok: 15, long_cached_input_usd_per_mtok: 0.25 }

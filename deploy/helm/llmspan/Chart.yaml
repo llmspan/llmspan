@@ -1,0 +1,17 @@
+apiVersion: v2
+name: llmspan
+description: OpenTelemetry proxy for OpenAI- and Anthropic-compatible LLM APIs
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+home: https://github.com/llmspan/llmspan
+sources:
+  - https://github.com/llmspan/llmspan
+keywords:
+  - otel
+  - llm
+  - proxy
+  - genai
+maintainers:
+  - name: Colin Wood
+    url: https://github.com/llmspan
